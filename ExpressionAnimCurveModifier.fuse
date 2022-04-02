@@ -1,0 +1,221 @@
+--[[--
+   ExpressionAnimCurveModifier.fuse
+
+  Modifier that provides common wave equations with damping and fine-tune control.
+
+  Author: djmonn
+  Version: 0.1
+
+--]]--
+
+
+FuRegisterClass('ExpressionAnimCurveModifier', CT_Modifier, {
+    REGS_Category = "Modifier",
+    REGS_OpIconString = "expcur",
+    REGS_OpDescription = "Modifier that provides common wave equations with damping and fine-tune control.",
+    REGS_Company = "djmonn",
+    REGS_URL = "",
+    REG_OpNoMask = true,
+    REG_NoBlendCtrls = true,
+    REG_NoObjMatCtrls = true,
+    REG_NoMotionBlurCtrls = true,
+    REG_Source_GlobalCtrls = true,
+    REG_Source_SizeCtrls = true,
+    REG_Source_AspectCtrls = true,
+    REG_Source_DepthCtrls = true,
+    REG_TimeVariant = true,
+    REGB_Temporal = true,
+    REG_Fuse_NoEdit = true,
+    REG_Fuse_NoReload = true,
+    REG_Version = 001,
+    REGID_DataType = "Number",
+    REDIG_InputDataType = "Number",
+})
+
+function Create()
+    WaveType = self:AddInput("Wave Shape", "wave_name", {
+        LINKID_DataType = "FuID",
+        -- This will allow us to grab the string name as ID later (vs ComboControl or normal FuID)
+        INPID_InputControl = "ComboIDControl",  
+        {CCS_AddString = "Random", CCID_AddID = "random",},
+        {CCS_AddString = "Sine", CCID_AddID = "sine",},
+        {CCS_AddString = "Triangle", CCID_AddID = "triangle",},
+        {CCS_AddString = "Square", CCID_AddID = "square",},
+        {CCS_AddString = "Sawtooth", CCID_AddID = "sawtooth",},
+        {CCS_AddString = "Sawtooth (Parabolic)", CCID_AddID = "sawtooth_parabolic",},
+        {CCS_AddString = "Sawtooth (Parabolic Reversed)", CCID_AddID = "sawtooth_parabolic_reversed",},
+        {CCS_AddString = "Sawtooth (Exponential)", CCID_AddID = "sawtooth_exponential",},
+        {CCS_AddString = "Bounce", CCID_AddID = "bounce",},
+        INPID_DefaultID = "sine",
+    })
+
+    -- We want it to be open by default
+    self:BeginControlNest("Amplitude", "Amplitude", true, {})
+    ScaleSlider = self:AddInput("Scale", "scale", {
+        LINKID_DataType="Number",
+        INPID_InputControl = "ScrewControl",
+        INP_MinAllowed = 0, 
+        INP_Default = 1,
+        IC_Visible = false, -- Not shown/used by default
+    })
+    MaxSlider = self:AddInput("Max", 'max', {
+        LINKID_DataType="Number",
+        INPID_InputControl = "ScrewControl",
+        INP_Default = 1,
+    })
+    MinSlider = self:AddInput("Min", 'min', {
+        LINKID_DataType="Number",
+        INPID_InputControl = "ScrewControl",
+        INP_Default = 0,
+    })
+
+    Damping = self:AddInput("Decay Strength", "decay_strength", {
+        LINKID_DataType="Number",
+        INPID_InputControl = "ScrewControl",
+        INP_Default = 0,
+    })
+
+    UseScale = self:AddInput("Use Scale", "use_scale", {
+        LINKID_DataType="Number",
+        INPID_InputControl = "CheckboxControl",
+        INP_Integer = true,
+        INP_Default = 0,
+        -- ICD_Width = 0.25,
+        INP_DoNotifyChanged = true,
+    })
+    self:EndControlNest()
+
+    -- We want it to be open by default
+    self:BeginControlNest("Frequency", "Frequency", true, {})
+    WaveLengthSlider = self:AddInput("Wave Length", 'wave_length', {
+        LINKID_DataType="Number",
+        INPID_InputControl = "SliderControl",  -- TODO: Do I want to allow screw?
+        INP_MinAllowed = 0,
+        INP_MaxAllowed = 100,
+        INP_Default = 24,
+    })
+    WaveLengthOffsetSlider = self:AddInput("Wave Length Offset", 'time_offset', {
+        -- TODO: right now this is really slow to move things, i think this needs to be scaled up somewhere
+        LINKID_DataType="Number",
+        INPID_InputControl = "ScrewControl",
+        INP_Default = 0,
+    })
+    self:EndControlNest()
+
+    OutImage = self:AddOutput("Output", "Output", {
+        LINKID_DataType = "Number",
+        LINK_Main = 1,
+    })
+
+end
+
+-- Faster as Locals --
+local abs = math.abs
+local asin = math.asin
+local cos = math.cos
+local exp = math.exp
+local int = math.floor
+local pi = math.pi
+local exp = math.exp
+local random = math.random
+local sin = math.sin
+function SetAmplitude(time, wave_length, max, min, decay_strength)
+    -- https://en.wikipedia.org/wiki/Damping
+    -- All waves share the same amplitude function
+    local damping = exp(-1*(decay_strength * (time / wave_length)))
+    return (max -  min) * damping
+end
+
+function GetWaveFunction(wave_name)
+    -- Wave functions retrofitted from via David Emeny and Cameron Carson:
+    -- https://www.cameroncarson.com/nuke-wave-expressions.
+    -- To understand Wave Equations better:
+    --  https://personal.math.ubc.ca/~cass/courses/m309-03a/a1/clayton/part2.html
+    -- We're returning the function so that we execute only the selected function,
+    --  instead executing of all wave functions when this function is called.
+    -- As a tradeoff I have to copy the anonymous function's signature a million times,
+    --  but the signature isn't likely to change
+    local waves = {
+        ["random"] = 
+            function(time, time_offset, wave_length) 
+                return random((time+time_offset)/wave_length) 
+            end,
+        ["sine"] = 
+            function(time, time_offset, wave_length)
+                return (sin(2*pi*(time+time_offset)/wave_length)+1)/2 
+            end,
+        ["triangle"] =
+            function(time, time_offset, wave_length)
+                return (asin(sin(2*pi*(time+time_offset)/wave_length))/pi+0.5)
+            end,
+        ["square"] =
+            function(time, time_offset, wave_length)
+                return int(sin(2*pi*(time+time_offset)/wave_length)+1)
+            end,
+        ["sawtooth"] =
+            function(time, time_offset, wave_length)
+                return ((time+time_offset) % wave_length)/wave_length 
+            end,
+        ["sawtooth_parabolic"] =
+            function(time, time_offset, wave_length)
+                return sin((pi*(time+time_offset)/(2*wave_length)) % (pi/2)) 
+            end,
+        ["sawtooth_parabolic_reversed"] =
+            function(time, time_offset, wave_length)
+                return cos((pi*(time+time_offset)/(2*wave_length)) % (pi/2))
+            end,
+        ["sawtooth_exponential"] =
+            function(time, time_offset, wave_length)
+                return (exp(2*pi*((time+time_offset) % wave_length)/wave_length)-1)/exp(2*pi)
+                end,
+        ["bounce"] =
+            function(time, time_offset, wave_length)
+                return abs(sin(pi*(time + time_offset)/wave_length))
+            end,
+    }
+    return waves[wave_name]
+end
+
+function ApplyWaveFunction(wave_fn, time, time_offset, wave_length, min, max, decay_strength)
+    return wave_fn(time, time_offset, wave_length) * SetAmplitude(time, wave_length, max, min, decay_strength) + min
+end
+
+function Process(req)
+    local wave_name = WaveType:GetValue(req).Value
+    local time_offset = WaveLengthOffsetSlider:GetValue(req).Value
+    local wave_length = WaveLengthSlider:GetValue(req).Value
+    local decay_strength = Damping:GetValue(req).Value
+    local time = req.Time - self.Comp.RenderStart
+
+    local use_scale = UseScale:GetValue(req).Value
+    local min = MinSlider:GetValue(req).Value
+    local max = min -- Temp value
+    if use_scale == 1 then
+        local scale = ScaleSlider:GetValue(req).Value
+        max = min + scale
+    else
+        max = MaxSlider:GetValue(req).Value
+    end
+
+
+    local wave_fn = GetWaveFunction(wave_name)
+    local res_val = ApplyWaveFunction(wave_fn, time, time_offset, wave_length, min, max, decay_strength)
+
+    OutImage:Set(req, res_val)
+end
+
+function NotifyChanged(inp, param, time)
+    if inp ~= nil and param ~= nil then
+        if inp == UseScale then
+            if param.Value == 1 then
+                ScaleSlider:SetAttrs({IC_Visible = true})  -- Show Scale Slider
+                MaxSlider:SetAttrs({IC_Visible = false})  -- Hide Max Slider
+                MinSlider:SetAttrs({ICS_Name = "Scale Offset"})  -- Rename min to scale offset
+            else  -- Inverse Operation
+                ScaleSlider:SetAttrs({IC_Visible = false})  -- Hide Scale Slider
+                MaxSlider:SetAttrs({IC_Visible = true})  -- show Max Slider
+                MinSlider:SetAttrs({ICS_Name = "Min"})  -- Rename scale offset to Min
+            end
+        end      
+    end 
+end
